@@ -11,6 +11,10 @@ from urllib.parse import urljoin
 import affine
 import numpy as np
 from PIL import Image
+from numpy import ndarray
+from numpy.ma import MaskedArray
+import rioxarray
+import xarray
 
 from . import config
 from .constants import PHOTOMETRIC, ColorInterp, MaskFlags
@@ -37,17 +41,17 @@ class ReaderMixin(abc.ABC):
 
     @abc.abstractmethod
     async def get_tile(
-        self, x: int, y: int, z: int
+            self, x: int, y: int, z: int
     ) -> Union[np.ndarray, List[np.ndarray]]:
         """Read image tile"""
         ...
 
     @abc.abstractmethod
     async def read(
-        self,
-        bounds: Tuple[float, float, float, float],
-        shape: Tuple[int, int],
-        resample_method: int = Image.NEAREST,
+            self,
+            bounds: Tuple[float, float, float, float],
+            shape: Tuple[int, int],
+            resample_method: int = Image.NEAREST,
     ) -> Union[
         Union[np.ndarray, np.ma.masked_array],
         List[Union[np.ndarray, np.ma.masked_array]],
@@ -90,7 +94,7 @@ class COGReader(ReaderMixin, PartialReadInterface):
     async def _open(self):
         """Internal method to open the cog by reading/parsing the file header"""
         async with Filesystem.create_from_filepath(
-            self.filepath, **self.kwargs
+                self.filepath, **self.kwargs
         ) as file_reader:
             self._file_reader = file_reader
             # Do the first request
@@ -250,9 +254,9 @@ class COGReader(ReaderMixin, PartialReadInterface):
         elif photometric == "ycbcr":
             interp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue]
         elif (
-            photometric == "cielab"
-            or photometric == "icclab"
-            or photometric == "itulab"
+                photometric == "cielab"
+                or photometric == "icclab"
+                or photometric == "itulab"
         ):
             interp = [
                 ColorInterp.lightness,
@@ -369,17 +373,20 @@ class COGReader(ReaderMixin, PartialReadInterface):
         return tile[0]
 
     async def read(
-        self,
-        bounds: Tuple[float, float, float, float],
-        shape: Tuple[int, int],
-        resample_method: int = Image.NEAREST,
-    ) -> Union[np.ndarray, np.ma.masked_array]:
+            self,
+            bounds: Tuple[float, float, float, float],
+            shape: Tuple[int, int] = None,
+            resample_method: int = Image.NEAREST,
+    ) -> tuple[Union[ndarray, MaskedArray], tuple[list[float], list[float]]]:
         """
         Perform a partial read.  All pixels within the specified bounding box are read from the image and the array is
         resampled to match the desired shape.
         """
         # Determine which tiles intersect the request bounds
-        ovr_level = self._get_overview_level(bounds, shape[1], shape[0])
+        if shape is None:
+            ovr_level = 0
+        else:
+            ovr_level = self._get_overview_level(bounds, shape[1], shape[0])
         ifd = self.ifds[ovr_level]
         img_tiles = self._calculate_image_tiles(
             bounds,
@@ -407,7 +414,21 @@ class COGReader(ReaderMixin, PartialReadInterface):
             resample_method=resample_method,
         )
 
-        return postprocessed
+        xcs = (
+            xarray.DataArray(
+                data=postprocessed,
+                dims=["band", "y", "x"],
+                coords=dict(
+                    band=[1],
+                    x=img_tiles.x_coord,
+                    y=img_tiles.y_coord,
+                )
+            ).astype("uint16")
+            .rio.write_nodata(0)
+            .rio.write_crs(input_crs=self.profile['crs'], grid_mapping_name='spatial_ref', inplace=True)
+        )
+
+        return xcs
 
     def create_tile_matrix_set(self, identifier: str = None) -> Dict[str, Any]:
         """Create an OGC TileMatrixSet where each TileMatrix corresponds to an overview"""
@@ -467,19 +488,19 @@ class CompositeReader(ReaderMixin):
         return await asyncio.gather(*futs)
 
     async def get_tile(
-        self, x: int, y: int, z: int, reducer: Optional[ReduceType] = None
+            self, x: int, y: int, z: int, reducer: Optional[ReduceType] = None
     ) -> List[np.ndarray]:
         """Fetch a tile from all readers"""
-        tiles = await self.map(func=lambda r: r.get_tile(x, y, z),)
+        tiles = await self.map(func=lambda r: r.get_tile(x, y, z), )
         reducer = reducer or self.default_reducer
         return reducer(tiles)
 
     async def read(
-        self,
-        bounds: Tuple[float, float, float, float],
-        shape: Tuple[int, int],
-        resample_method: int = Image.NEAREST,
-        reducer: Optional[ReduceType] = None,
+            self,
+            bounds: Tuple[float, float, float, float],
+            shape: Tuple[int, int],
+            resample_method: int = Image.NEAREST,
+            reducer: Optional[ReduceType] = None,
     ):
         """Partial read across all readers"""
         reads = await self.map(func=lambda r: r.read(bounds, shape, resample_method))

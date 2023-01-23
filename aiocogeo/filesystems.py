@@ -172,7 +172,7 @@ class HttpFilesystem(Filesystem):
                 data = await resp.content.read()
         except (aiohttp.ClientError, aiohttp.ClientResponseError) as e:
             await self._close()
-            raise FileNotFoundError(f"File not found: {self.filepath}") from e
+            raise FileNotFoundError(f"File not found: {self.filepath}, cause {type(e)} : {e}") from e
         return data
 
     async def request_json(self) -> Dict:
@@ -183,7 +183,7 @@ class HttpFilesystem(Filesystem):
                 data = await resp.json()
         except (aiohttp.ClientError, aiohttp.ClientResponseError) as e:
             await self._close()
-            raise FileNotFoundError(f"File not found: {self.filepath}") from e
+            raise FileNotFoundError(f"File not found: {self.filepath}, cause {type(e)} : {e}") from e
         return data
 
     async def _close(self) -> None:
@@ -292,7 +292,7 @@ class S3Filesystem(Filesystem):
             req = await self.object.get(Range=f"bytes={start}-{start+offset}", **kwargs)
         except botocore.exceptions.ClientError as e:
             await self._close()
-            raise FileNotFoundError(f"File not found: {self.filepath}") from e
+            raise FileNotFoundError(f"File not found: {self.filepath}, cause {type(e)} : {e}") from e
         elapsed = time.time() - begin
         content_range = req["ResponseMetadata"]["HTTPHeaders"]["content-range"]
         if not config.VERBOSE_LOGS:
@@ -322,7 +322,7 @@ class S3Filesystem(Filesystem):
             req = await self.object.get()
         except botocore.exceptions.ClientError as e:
             await self._close()
-            raise FileNotFoundError(f"File not found: {self.filepath}") from e
+            raise FileNotFoundError(f"File not found: {self.filepath}, cause {type(e)} : {e}") from e
         elapsed = time.time() - begin
         content_range = req["ResponseMetadata"]["HTTPHeaders"]["content-range"]
         if not config.VERBOSE_LOGS:
@@ -351,6 +351,7 @@ class S3Filesystem(Filesystem):
     async def __aenter__(self):
         """Async context management"""
         splits = urlsplit(self.filepath)
-        self.resource = await aioboto3.resource("s3").__aenter__()
-        self.object = await self.resource.Object(splits.netloc, splits.path[1:])
+        session = aioboto3.Session()
+        self.resource = await session.resource("s3").__aenter__()
+        self.object = await self.resource.Object(splits.netloc, f"{splits.netloc}/{splits.path[1:]}")
         return self

@@ -43,6 +43,7 @@ setup(
     packages=find_packages(exclude=["tests"]),
     include_package_data=True,
     install_requires=[
+        "aioboto3",
         "aiofiles",
         "aiohttp<=3.6.2",
         "aiocache",
@@ -51,7 +52,7 @@ setup(
         "typer",
         "Pillow",
         "stac-pydantic>=1.3.*",
-        "geojson-pydantic==0.1.0",
+        "geojson-pydantic==0.5.0",
         "xmltodict",
     ],
     test_suite="tests",

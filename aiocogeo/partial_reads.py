@@ -41,6 +41,10 @@ class TileMetadata:
     # overview level (where 0 is source)
     ovr_level: int
 
+    # coordinate grid of final partial read
+    x_coord: list[float]
+    y_coord: list[float]
+
 
 @dataclass
 class PartialReadBase(abc.ABC):
@@ -121,6 +125,7 @@ class PartialReadBase(abc.ABC):
         target_gt = affine.Affine.translation(
             bounds[0], bounds[3]
         ) * affine.Affine.scale(
+            # pixel size
             (bounds[2] - bounds[0]) / width, (bounds[1] - bounds[3]) / height
         )
         target_res = target_gt.a
@@ -186,12 +191,13 @@ class PartialReadBase(abc.ABC):
         )
         inv_fused_gt = ~fused_gt
         xorigin, yorigin = [round(v) for v in inv_fused_gt * (bounds[0], bounds[3])]
-
+        width = round(brx - tlx)
+        height = round(bry - tly)
         return TileMetadata(
             tlx=xorigin,
             tly=yorigin,
-            width=round(brx - tlx),
-            height=round(bry - tly),
+            width=width,
+            height=height,
             xmin=xmin,
             ymin=ymin,
             xmax=xmax,
@@ -201,6 +207,8 @@ class PartialReadBase(abc.ABC):
             bands=band_count,
             dtype=dtype,
             ovr_level=ovr_level,
+            x_coord=[_tlx + (xorigin + 0.5 + q) * geotransform.a for q in range(0, width)],
+            y_coord=[_tly + (yorigin + 0.5 + q) * geotransform.e for q in range(0, height)]
         )
 
     def _init_array(self, img_tiles: TileMetadata) -> NpArrayType:
@@ -313,8 +321,12 @@ class PartialReadBase(abc.ABC):
         resample_method: int,
     ) -> NpArrayType:
         """Wrapper around ``_clip_array`` and ``_resample`` to postprocess the partial read"""
+        clipped = self._clip_array(arr, img_tiles)
+        if out_shape is None:
+            return clipped
+
         return self._resample(
-            self._clip_array(arr, img_tiles),
+            clipped,
             img_tiles=img_tiles,
             out_shape=out_shape,
             resample_method=resample_method,
