@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import aiofiles
 import aiohttp
 import botocore.exceptions
+from aiobotocore.response import AioReadTimeoutError
 from aiocache import Cache, cached
 
 from . import config
@@ -44,13 +45,16 @@ def config_cache(fn: Callable) -> Callable:
 
     def wrap_function(*args, **kwargs):
         is_header = kwargs.get("is_header", None)
+        ttl = None
         if is_header and config.ENABLE_HEADER_CACHE:
             should_cache = True
         elif config.ENABLE_BLOCK_CACHE and not is_header:
             should_cache = True
+            ttl = config.BLOCK_CACHE_TTL
         else:
             should_cache = False
         kwargs["cache_read"] = kwargs["cache_write"] = should_cache
+        kwargs["ttl"] = ttl
         return fn(*args, **kwargs)
 
     return wrap_function
@@ -293,6 +297,10 @@ class S3Filesystem(Filesystem):
         except botocore.exceptions.ClientError as e:
             await self._close()
             raise FileNotFoundError(f"File not found: {self.filepath}") from e
+        except AioReadTimeoutError:
+            print(f"WARNING: AioReadTimeoutError for {self.filepath}. Retrying")
+            asyncio.sleep(0.1)
+            return self._range_request(self, start, offset)
         elapsed = time.time() - begin
         content_range = req["ResponseMetadata"]["HTTPHeaders"]["content-range"]
         if not config.VERBOSE_LOGS:
@@ -346,11 +354,17 @@ class S3Filesystem(Filesystem):
         """
         Close any resources created in ``__aexit__``, allows extending ``Filesystem`` context managers past their scope
         """
-        await self.resource.__aexit__("", "", "")
+        if not self.kwargs.get("resource"):
+            await self.resource.__aexit__("", "", "")
 
     async def __aenter__(self):
         """Async context management"""
         splits = urlsplit(self.filepath)
-        self.resource = await aioboto3.resource("s3").__aenter__()
+
+        if self.kwargs.get("resource"):
+            self.resource = self.kwargs["resource"]
+        else:
+            self.resource = await aioboto3.resource("s3").__aenter__()
+
         self.object = await self.resource.Object(splits.netloc, splits.path[1:])
         return self

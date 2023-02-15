@@ -18,6 +18,16 @@ from .errors import InvalidTiffError, TileNotFoundError
 from .filesystems import Filesystem
 from .ifd import IFD, ImageIFD, MaskIFD
 from .partial_reads import PartialReadInterface
+import aioboto3
+
+import importlib
+try:
+    import xarray
+    import rioxarray
+    xarray_available = True
+except:
+    xarray_available = False
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
@@ -61,6 +71,7 @@ class COGReader(ReaderMixin, PartialReadInterface):
     """COGReader"""
 
     filepath: str
+    resource: Optional[aioboto3.Session.resource]
     ifds: Optional[List[ImageIFD]] = field(default_factory=lambda: [])
     mask_ifds: Optional[List[MaskIFD]] = field(default_factory=lambda: [])
 
@@ -90,7 +101,9 @@ class COGReader(ReaderMixin, PartialReadInterface):
     async def _open(self):
         """Internal method to open the cog by reading/parsing the file header"""
         async with Filesystem.create_from_filepath(
-            self.filepath, **self.kwargs
+            self.filepath,
+            resource=self.resource, 
+            **self.kwargs
         ) as file_reader:
             self._file_reader = file_reader
             # Do the first request
@@ -371,15 +384,19 @@ class COGReader(ReaderMixin, PartialReadInterface):
     async def read(
         self,
         bounds: Tuple[float, float, float, float],
-        shape: Tuple[int, int],
+        shape: Tuple[int, int] = None,
         resample_method: int = Image.NEAREST,
+        as_xarray = False,
     ) -> Union[np.ndarray, np.ma.masked_array]:
         """
         Perform a partial read.  All pixels within the specified bounding box are read from the image and the array is
         resampled to match the desired shape.
         """
         # Determine which tiles intersect the request bounds
-        ovr_level = self._get_overview_level(bounds, shape[1], shape[0])
+        if shape:
+            ovr_level = self._get_overview_level(bounds, shape[1], shape[0])
+        else:
+            ovr_level = 0
         ifd = self.ifds[ovr_level]
         img_tiles = self._calculate_image_tiles(
             bounds,
@@ -406,6 +423,22 @@ class COGReader(ReaderMixin, PartialReadInterface):
             out_shape=shape,
             resample_method=resample_method,
         )
+
+        if as_xarray and not xarray_available:
+            raise Exception('xarray is not installed')
+
+        if as_xarray:
+            return (xarray.DataArray(
+                data=postprocessed,
+                dims=["band", "y", "x"],
+                coords=dict(
+                    band=[1],
+                    x=img_tiles.x_coord,
+                    y=img_tiles.y_coord,
+                )
+            ).astype(img_tiles.dtype)
+            .rio.write_nodata(0)
+            .rio.write_crs(input_crs=self.profile['crs'], grid_mapping_name='spatial_ref', inplace=True))
 
         return postprocessed
 
