@@ -45,16 +45,13 @@ def config_cache(fn: Callable) -> Callable:
 
     def wrap_function(*args, **kwargs):
         is_header = kwargs.get("is_header", None)
-        ttl = None
         if is_header and config.ENABLE_HEADER_CACHE:
             should_cache = True
         elif config.ENABLE_BLOCK_CACHE and not is_header:
             should_cache = True
-            ttl = config.BLOCK_CACHE_TTL
         else:
             should_cache = False
         kwargs["cache_read"] = kwargs["cache_write"] = should_cache
-        kwargs["ttl"] = ttl
         return fn(*args, **kwargs)
 
     return wrap_function
@@ -96,6 +93,14 @@ class Filesystem(abc.ABC):
         elif not splits.scheme and not splits.netloc:
             return LocalFilesystem(filepath, kwargs=kwargs)
         raise NotImplementedError("Unsupported file system")
+
+    async def range_request(self, start: int, offset: int, **kwargs) -> bytes:
+        """
+        Perform and cache a range request.
+        """
+        if kwargs.get("is_header", False):
+            return await self._range_request_header(start, offset)
+        return await self._range_request_body(start, offset)
 
     @config_cache
     @cached(
