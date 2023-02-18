@@ -102,11 +102,11 @@ class Filesystem(abc.ABC):
             return await self._range_request_header(start, offset)
         return await self._range_request_body(start, offset)
 
-    # @config_cache
-    # @cached(
-    #     cache=Cache.MEMORY,
-    #     key_builder=lambda fn, *args, **kwargs: f"{args[0].filepath}-{args[1]}-{args[2]}",
-    # )
+    @config_cache
+    @cached(
+        cache=Cache.MEMORY,
+        key_builder=lambda fn, *args, **kwargs: f"{args[0].filepath}-{args[1]}-{args[2]}",
+    )
     async def range_request(self, start: int, offset: int, **kwargs) -> bytes:
         """
         Perform and cache a range request.
